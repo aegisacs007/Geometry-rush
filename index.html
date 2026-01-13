@@ -29,6 +29,7 @@
         
         #score-display { font-size: 28px; color: #fff; margin-top: 15px; font-weight: 800; }
         
+        /* Ensure this is hidden by default using !important to be safe */
         #game-over-screen {
             display: none; position: absolute;
             top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -80,11 +81,12 @@
         const groundY = 280;
 
         // Game Variables
-        let gameRunning = false; // Wait for first tap
+        let gameRunning = false; 
+        let isGameOver = false; // New safety flag
         let score = 0;
-        let speed = 6; // Started faster
+        let speed = 6; 
         let frameCount = 0;
-        let speedMultiplier = 0.002; // Gets harder every frame
+        let speedMultiplier = 0.002; 
 
         // Player
         const player = {
@@ -95,24 +97,25 @@
 
         let obstacles = [];
 
-        // --- AUDIO ENGINE (Tense Drone + SFX) ---
+        // --- AUDIO ENGINE ---
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         let droneOsc;
 
         function startDrone() {
             if (droneOsc) return;
-            droneOsc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            droneOsc.type = 'sawtooth';
-            droneOsc.frequency.value = 50; // Low hum
-            gain.gain.value = 0.02; // Quiet background
-            droneOsc.connect(gain); gain.connect(audioCtx.destination);
-            droneOsc.start();
+            try {
+                droneOsc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                droneOsc.type = 'sawtooth';
+                droneOsc.frequency.value = 50; 
+                gain.gain.value = 0.02; 
+                droneOsc.connect(gain); gain.connect(audioCtx.destination);
+                droneOsc.start();
+            } catch(e) { console.log("Audio not ready yet"); }
         }
 
         function updateDrone() {
             if(droneOsc && gameRunning) {
-                // Drone gets higher pitch as you go faster
                 droneOsc.frequency.exponentialRampToValueAtTime(50 + (score/5), audioCtx.currentTime + 0.1);
             }
         }
@@ -134,26 +137,35 @@
                 osc.type = 'sawtooth';
                 osc.frequency.setValueAtTime(100, audioCtx.currentTime);
                 osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.5);
-                gain.gain.setValueAtTime(0.5, audioCtx.currentTime); // LOUD
+                gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
                 gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
                 osc.start(); osc.stop(audioCtx.currentTime + 0.5);
             }
         }
 
-        // --- CONTROLS ---
+        // --- CONTROLS (FIXED LOGIC) ---
         function handleInput(e) {
+            // Prevent scrolling
             if(e.type === 'touchstart') e.preventDefault(); 
-            if(!gameRunning && document.getElementById('game-over-screen').style.display === 'none') {
-                gameRunning = true; // Start on first tap
+            
+            // 1. START GAME LOGIC
+            if(!gameRunning && !isGameOver) {
+                gameRunning = true;
+                if (audioCtx.state === 'suspended') audioCtx.resume();
                 startDrone();
                 update();
+                return; // Stop here so we don't jump on the start tap
             }
-            if (player.grounded && gameRunning) {
+
+            // 2. JUMP LOGIC
+            if (gameRunning && player.grounded) {
                 player.dy = player.jumpPower;
                 player.grounded = false;
                 playSound('jump');
             }
         }
+
+        // Attach listeners
         document.addEventListener('touchstart', handleInput, {passive: false});
         document.addEventListener('mousedown', handleInput);
         document.addEventListener('keydown', (e) => { if(e.code === 'Space') handleInput(e); });
@@ -162,7 +174,7 @@
         function update() {
             if (!gameRunning) return;
 
-            // Clear
+            // Clear Screen
             ctx.fillStyle = '#050505';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -172,17 +184,15 @@
             ctx.strokeStyle = '#fff';
             ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(canvas.width, groundY); ctx.stroke();
 
-            // 1. PLAYER PHYSICS
+            // Physics
             player.dy += player.gravity;
             player.y += player.dy;
 
-            // Rotate Cube while jumping
+            // Rotation
             if(!player.grounded) player.rotation += 0.15;
-            else { 
-                // Snap to flat when grounded
-                player.rotation = Math.round(player.rotation / (Math.PI/2)) * (Math.PI/2); 
-            }
+            else player.rotation = Math.round(player.rotation / (Math.PI/2)) * (Math.PI/2); 
 
+            // Ground Collision
             if (player.y + player.height > groundY) {
                 player.y = groundY - player.height;
                 player.dy = 0;
@@ -190,7 +200,7 @@
                 player.rotation = 0;
             }
 
-            // Draw Player (with Rotation)
+            // Draw Player
             ctx.save();
             ctx.translate(player.x + player.width/2, player.y + player.height/2);
             ctx.rotate(player.rotation);
@@ -199,36 +209,29 @@
             ctx.fillRect(-player.width/2, -player.height/2, player.width, player.height);
             ctx.restore();
 
-            // 2. OBSTACLE SPAWNING (The Hard Part)
+            // Obstacles
             frameCount++;
-            speed += speedMultiplier; // Accerelate
+            speed += speedMultiplier; 
             updateDrone();
 
-            let spawnRate = Math.floor(100 - (speed * 2)); // Spawn faster as speed increases
-            if(spawnRate < 40) spawnRate = 40; // Cap max spawn rate
+            let spawnRate = Math.floor(100 - (speed * 2)); 
+            if(spawnRate < 40) spawnRate = 40; 
 
             if (frameCount % spawnRate === 0 || Math.random() < 0.01) {
                 if(frameCount > 60) {
                     let type = Math.random();
-                    // 30% Chance of DOUBLE SPIKE
-                    if(type < 0.3) {
-                         obstacles.push({x: canvas.width, y: groundY - 30, w: 50, h: 30, type: 'spike'}); 
-                    } else {
-                         obstacles.push({x: canvas.width, y: groundY - 30, w: 20, h: 30, type: 'spike'}); 
-                    }
+                    if(type < 0.3) obstacles.push({x: canvas.width, y: groundY - 30, w: 50, h: 30}); 
+                    else obstacles.push({x: canvas.width, y: groundY - 30, w: 20, h: 30}); 
                     frameCount = 0;
                 }
             }
 
-            // 3. MOVE OBSTACLES
             for (let i = 0; i < obstacles.length; i++) {
                 let obs = obstacles[i];
                 obs.x -= speed;
 
                 ctx.fillStyle = '#ff0055';
                 ctx.shadowBlur = 10; ctx.shadowColor = '#ff0055';
-                
-                // Draw Spikes
                 ctx.beginPath();
                 ctx.moveTo(obs.x, obs.y + obs.h);
                 ctx.lineTo(obs.x + obs.w/2, obs.y);
@@ -236,7 +239,7 @@
                 ctx.fill();
                 ctx.shadowBlur = 0;
 
-                // COLLISION (Precise Hitbox)
+                // Collision
                 if (
                     player.x < obs.x + obs.w - 5 &&
                     player.x + player.width > obs.x + 5 &&
@@ -259,7 +262,8 @@
 
         function gameOver() {
             gameRunning = false;
-            if(droneOsc) { droneOsc.stop(); droneOsc = null; } // Stop hum
+            isGameOver = true;
+            if(droneOsc) { droneOsc.stop(); droneOsc = null; } 
             playSound('crash');
             document.getElementById('game-over-screen').style.display = 'block';
             document.getElementById('final-score').innerText = score;
@@ -269,14 +273,17 @@
             obstacles = []; score = 0; speed = 6; frameCount = 0;
             player.y = 200; player.dy = 0; player.rotation = 0;
             gameRunning = true;
+            isGameOver = false;
             document.getElementById('game-over-screen').style.display = 'none';
+            if (audioCtx.state === 'suspended') audioCtx.resume();
             startDrone();
             update();
         }
 
-        // Draw initial frame
+        // Draw Start Screen
         ctx.fillStyle = '#050505'; ctx.fillRect(0,0,canvas.width, canvas.height);
-        ctx.fillStyle = '#fff'; ctx.fillText("TAP TO START", canvas.width/2 - 40, canvas.height/2);
+        ctx.fillStyle = '#fff'; ctx.font = "20px Courier New"; 
+        ctx.fillText("TAP TO START", canvas.width/2 - 70, canvas.height/2);
 
     </script>
 </body>
