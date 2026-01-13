@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Geometry Rush ⚡</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+            touch-action: manipulation; /* Prevents double-tap zoom */
+        }
+        
+        canvas {
+            background: linear-gradient(to bottom, #222, #000);
+            border-top: 2px solid #00ffcc;
+            border-bottom: 2px solid #00ffcc;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+            max-width: 100%;
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 10%;
+            text-align: center;
+            color: white;
+            pointer-events: none; /* Let clicks pass through to canvas */
+        }
+
+        h1 { margin: 0; font-size: 40px; text-shadow: 0 0 10px #00ffcc; font-weight: 800; font-style: italic; }
+        p { color: #888; font-size: 14px; margin-top: 5px; }
+        
+        #score-display { font-size: 24px; color: #fff; margin-top: 10px; font-weight: bold; }
+        
+        #game-over-screen {
+            display: none;
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            border: 2px solid #ff0055;
+            z-index: 10;
+        }
+        
+        button {
+            background: #ff0055; color: white; border: none;
+            padding: 15px 30px; font-size: 18px; font-weight: bold;
+            border-radius: 30px; cursor: pointer; margin-top: 15px;
+            box-shadow: 0 0 15px #ff0055;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ui-layer">
+        <h1>NEON RUSH</h1>
+        <div id="score-display">SCORE: 0</div>
+        <p>Tap screen / Spacebar to Jump</p>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="game-over-screen">
+        <h2 style="color:#ff0055; margin:0; font-size:30px;">CRASHED!</h2>
+        <p style="color:white;">Score: <span id="final-score">0</span></p>
+        <button onclick="resetGame()">TRY AGAIN ↻</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Set Canvas Size
+        canvas.width = window.innerWidth > 600 ? 600 : window.innerWidth;
+        canvas.height = 300;
+
+        // Game Variables
+        let gameRunning = true;
+        let score = 0;
+        let speed = 5;
+        let frameCount = 0;
+
+        // Player (The Cube)
+        const player = {
+            x: 50,
+            y: 200,
+            width: 30,
+            height: 30,
+            dy: 0, // Vertical speed
+            jumpPower: -12,
+            gravity: 0.8,
+            grounded: false,
+            color: '#00ffcc'
+        };
+
+        // Obstacles
+        let obstacles = [];
+
+        // --- AUDIO (Generated Beeps) ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+
+            if (type === 'jump') {
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'crash') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+            }
+        }
+
+        // --- INPUTS ---
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') jump();
+        });
+        document.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Stop scrolling
+            jump();
+        });
+        document.addEventListener('mousedown', jump);
+
+        function jump() {
+            if (!gameRunning) return;
+            if (player.grounded) {
+                player.dy = player.jumpPower;
+                player.grounded = false;
+                playSound('jump');
+            }
+        }
+
+        // --- GAME LOOP ---
+        function update() {
+            if (!gameRunning) return;
+
+            // Clear Screen
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Ground Line
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 250);
+            ctx.lineTo(canvas.width, 250);
+            ctx.stroke();
+
+            // 1. UPDATE PLAYER PHYSICS
+            player.dy += player.gravity; // Apply Gravity
+            player.y += player.dy;
+
+            // Hit Ground
+            if (player.y + player.height > 250) {
+                player.y = 250 - player.height;
+                player.dy = 0;
+                player.grounded = true;
+            }
+
+            // Draw Player
+            ctx.fillStyle = player.color;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            ctx.shadowBlur = 0; // Reset shadow for other objects
+
+            // 2. SPAWN OBSTACLES
+            frameCount++;
+            // Spawn random spikes (random distance)
+            if (frameCount % Math.floor(1000 / speed) === 0 || Math.random() < 0.005) {
+                if (frameCount > 60) { // Don't spawn immediately
+                    obstacles.push({
+                        x: canvas.width,
+                        y: 220, // Ground level spike
+                        width: 20,
+                        height: 30,
+                        type: 'spike'
+                    });
+                    // Prevent obstacles spawning too close
+                    frameCount = 0; 
+                }
+            }
+
+            // 3. MOVE & DRAW OBSTACLES
+            for (let i = 0; i < obstacles.length; i++) {
+                let obs = obstacles[i];
+                obs.x -= speed; // Move Left
+
+                // Draw Spike (Triangle)
+                ctx.fillStyle = '#ff0055';
+                ctx.beginPath();
+                ctx.moveTo(obs.x, obs.y + obs.height); // Bottom Left
+                ctx.lineTo(obs.x + obs.width / 2, obs.y); // Top Center
+                ctx.lineTo(obs.x + obs.width, obs.y + obs.height); // Bottom Right
+                ctx.fill();
+
+                // COLLISION DETECTION
+                if (
+                    player.x < obs.x + obs.width &&
+                    player.x + player.width > obs.x &&
+                    player.y < obs.y + obs.height &&
+                    player.y + player.height > obs.y
+                ) {
+                    gameOver();
+                }
+
+                // Remove off-screen obstacles
+                if (obs.x + obs.width < 0) {
+                    obstacles.splice(i, 1);
+                    score++; // Add score when passed
+                    speed += 0.05; // Game gets faster!
+                    i--;
+                }
+            }
+
+            // Draw Score
+            document.getElementById('score-display').innerText = "SCORE: " + score;
+
+            requestAnimationFrame(update);
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            playSound('crash');
+            document.getElementById('game-over-screen').style.display = 'block';
+            document.getElementById('final-score').innerText = score;
+        }
+
+        function resetGame() {
+            obstacles = [];
+            score = 0;
+            speed = 5;
+            frameCount = 0;
+            player.y = 200;
+            player.dy = 0;
+            gameRunning = true;
+            document.getElementById('game-over-screen').style.display = 'none';
+            update();
+        }
+
+        // Start Loop
+        update();
+
+    </script>
+</body>
+</html>
